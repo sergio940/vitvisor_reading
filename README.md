@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Vitvisor - Valoración de Libros Reales</title>
+<title>Vitvisor - Libros en Tiempo Real</title>
 <style>
   body { font-family: Arial, sans-serif; background:#f2f2f2; margin:0; padding:0; }
   header { background:#2c3e50; color:#fff; padding:20px; text-align:center; }
@@ -27,25 +27,26 @@
   .comment-box textarea { width:100%; padding:5px; resize:none; border-radius:5px; border:1px solid #ccc; }
   .comment-box button { margin-top:5px; padding:8px 15px; background:#2c3e50; color:#fff; border:none; border-radius:5px; cursor:pointer; }
   .comment-box button:hover { background:#34495e; }
-  .other-comments { font-size:0.8em; text-align:left; margin-top:5px; }
+  .other-comments { font-size:0.8em; text-align:left; margin-top:5px; max-height:100px; overflow-y:auto; }
 </style>
 </head>
 <body>
 
-<header><h1>Vitvisor - Valoración de Libros Reales</h1></header>
+<header><h1>Vitvisor - Libros en Tiempo Real</h1></header>
 <div class="container">
 
   <!-- LOGIN -->
   <div class="login-container">
-    <input type="text" id="username" placeholder="Nombre de usuario">
+    <input type="email" id="email" placeholder="Email">
+    <input type="password" id="password" placeholder="Contraseña">
+    <button id="btnRegister">Registrarse</button>
     <button id="btnLogin">Iniciar Sesión</button>
-    <p id="currentUser" style="margin-top:10px;"></p>
+    <p id="currentUser"></p>
   </div>
 
   <!-- BUSCADOR -->
   <div class="search-container">
     <input type="text" id="searchBook" placeholder="Buscar libro por título o autor">
-    <button id="btnSearch">Buscar</button>
   </div>
 
   <!-- LISTADO DE LIBROS -->
@@ -53,101 +54,140 @@
 
 </div>
 
+<!-- FIREBASE -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
 <script>
-// ---------- USUARIOS ----------
-let currentUser = localStorage.getItem('currentUser') || null;
-const currentUserDisplay = document.getElementById('currentUser');
-function updateUserDisplay() {
-  currentUserDisplay.textContent = currentUser ? `Usuario actual: ${currentUser}` : 'No has iniciado sesión';
-}
-updateUserDisplay();
-document.getElementById('btnLogin').addEventListener('click', () => {
-  const usernameInput = document.getElementById('username').value.trim();
-  if(!usernameInput) return alert('Introduce un nombre de usuario.');
-  currentUser = usernameInput;
-  localStorage.setItem('currentUser', currentUser);
-  updateUserDisplay();
-});
+  // ----- CONFIGURACIÓN DE FIREBASE -----
+  const firebaseConfig = {
+    apiKey: "TU_API_KEY",
+    authDomain: "TU_PROJECT_ID.firebaseapp.com",
+    projectId: "TU_PROJECT_ID",
+    storageBucket: "TU_PROJECT_ID.appspot.com",
+    messagingSenderId: "TU_SENDER_ID",
+    appId: "TU_APP_ID"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
 
-// ---------- BÚSQUEDA GOOGLE BOOKS API ----------
-async function fetchBooks(query){
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=15`;
-  const resp = await fetch(url);
-  const data = await resp.json();
-  return data.items || [];
-}
-
-// ---------- CREAR TARJETA DE LIBRO ----------
-function createBookCard(book){
-  const info = book.volumeInfo;
-  const id = book.id;
-  const title = info.title || 'Título desconocido';
-  const authors = (info.authors || ['Autor desconocido']).join(', ');
-  const thumbnail = info.imageLinks?.thumbnail || 'https://via.placeholder.com/150x220.png?text=Sin+portada';
-  const description = info.description ? info.description.slice(0, 150)+'...' : 'Sin descripción';
-
-  const allRatings = JSON.parse(localStorage.getItem('ratings')) || {};
-  const bookRatings = allRatings[id] || {};
-  const userRating = bookRatings[currentUser]?.rating || 0;
-  const userComment = bookRatings[currentUser]?.comment || '';
-
-  const card = document.createElement('div');
-  card.className = 'book-card';
-  card.innerHTML = `
-    <img src="${thumbnail}" alt="Portada de ${title}">
-    <h3>${title}</h3>
-    <p>Autor(es): ${authors}</p>
-    <p>${description}</p>
-    <div class="rating">
-      ${[5,4,3,2,1].map(star => `
-        <input type="radio" id="star${star}-${id}" name="rating${id}" value="${star}" ${userRating==star?'checked':''}>
-        <label for="star${star}-${id}">&#9733;</label>
-      `).join('')}
-    </div>
-    <div class="comment-box">
-      <textarea placeholder="Escribe tu comentario...">${userComment}</textarea>
-      <button type="button">Guardar</button>
-    </div>
-    <div class="other-comments">
-      <h4>Otros usuarios:</h4>
-      <ul id="comments-${id}"></ul>
-    </div>
-  `;
-
-  // Mostrar comentarios de otros usuarios
-  const commentsList = card.querySelector(`#comments-${id}`);
-  for(const user in bookRatings){
-    if(user!==currentUser){
-      const li = document.createElement('li');
-      li.textContent = `${user}: ${bookRatings[user].comment || ''} (${bookRatings[user].rating || '0'}★)`;
-      commentsList.appendChild(li);
-    }
+  // ----- GESTIÓN DE USUARIOS -----
+  const currentUserDisplay = document.getElementById('currentUser');
+  function updateUserDisplay(user) {
+    currentUserDisplay.textContent = user ? `Usuario actual: ${user.email}` : 'No has iniciado sesión';
   }
 
-  // Guardar valoración
-  card.querySelector('.comment-box button').addEventListener('click',()=>{
-    if(!currentUser) return alert('Inicia sesión primero.');
-    const rating = parseInt(card.querySelector(`input[name="rating${id}"]:checked`)?.value || 0);
-    const comment = card.querySelector('textarea').value;
-    if(!allRatings[id]) allRatings[id] = {};
-    allRatings[id][currentUser] = {rating, comment};
-    localStorage.setItem('ratings', JSON.stringify(allRatings));
-    alert('Valoración guardada!');
+  document.getElementById('btnRegister').addEventListener('click', async () => {
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    try {
+      await auth.createUserWithEmailAndPassword(email,password);
+    } catch(e){ alert(e.message); }
   });
 
-  return card;
-}
+  document.getElementById('btnLogin').addEventListener('click', async () => {
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    try {
+      await auth.signInWithEmailAndPassword(email,password);
+    } catch(e){ alert(e.message); }
+  });
 
-// ---------- EVENTO DE BUSQUEDA ----------
-document.getElementById('btnSearch').addEventListener('click', async () => {
-  const query = document.getElementById('searchBook').value.trim();
-  if(!query) return;
-  const books = await fetchBooks(query);
+  auth.onAuthStateChanged(user => {
+    updateUserDisplay(user);
+  });
+
+  // ----- BÚSQUEDA DE LIBROS EN TIEMPO REAL -----
+  const searchInput = document.getElementById('searchBook');
   const bookList = document.getElementById('bookList');
-  bookList.innerHTML = '';
-  books.forEach(book => bookList.appendChild(createBookCard(book)));
-});
-</script>
+  let timeout = null;
 
+  searchInput.addEventListener('input', () => {
+    clearTimeout(timeout);
+    timeout = setTimeout(async () => {
+      const query = searchInput.value.trim();
+      if(!query) { bookList.innerHTML = ''; return; }
+      const books = await fetchBooks(query);
+      bookList.innerHTML = '';
+      books.forEach(book => bookList.appendChild(createBookCard(book)));
+    }, 400); // retraso para evitar demasiadas consultas
+  });
+
+  async function fetchBooks(query){
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=15`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    return data.items || [];
+  }
+
+  // ----- CREAR TARJETA DE LIBRO -----
+  function createBookCard(book){
+    const info = book.volumeInfo;
+    const id = book.id;
+    const title = info.title || 'Título desconocido';
+    const authors = (info.authors || ['Autor desconocido']).join(', ');
+    const thumbnail = info.imageLinks?.thumbnail || 'https://via.placeholder.com/150x220.png?text=Sin+portada';
+    const description = info.description ? info.description.slice(0,150)+'...' : 'Sin descripción';
+
+    const card = document.createElement('div');
+    card.className = 'book-card';
+    card.innerHTML = `
+      <img src="${thumbnail}" alt="Portada de ${title}">
+      <h3>${title}</h3>
+      <p>Autor(es): ${authors}</p>
+      <p>${description}</p>
+      <div class="rating">
+        ${[5,4,3,2,1].map(star=>`
+          <input type="radio" id="star${star}-${id}" name="rating${id}" value="${star}">
+          <label for="star${star}-${id}">&#9733;</label>
+        `).join('')}
+      </div>
+      <div class="comment-box">
+        <textarea placeholder="Escribe tu comentario..."></textarea>
+        <button>Guardar</button>
+      </div>
+      <div class="other-comments">
+        <h4>Otros usuarios:</h4>
+        <ul id="comments-${id}"></ul>
+      </div>
+    `;
+
+    const commentList = card.querySelector(`#comments-${id}`);
+
+    // Escuchar cambios en tiempo real
+    db.collection('books').doc(id).onSnapshot(doc=>{
+      commentList.innerHTML = '';
+      const comments = doc.data()?.comments || [];
+      comments.forEach(c=>{
+        const li = document.createElement('li');
+        li.textContent = `${c.user}: ${c.comment} (${c.rating}★)`;
+        commentList.appendChild(li);
+      });
+    });
+
+    // Guardar comentario
+    card.querySelector('button').addEventListener('click', async ()=>{
+      const user = auth.currentUser;
+      if(!user) return alert('Inicia sesión primero.');
+      const rating = parseInt(card.querySelector(`input[name="rating${id}"]:checked`)?.value || 0);
+      const comment = card.querySelector('textarea').value;
+      const ref = db.collection('books').doc(id);
+      await ref.set({
+        comments: firebase.firestore.FieldValue.arrayUnion({
+          user: user.email,
+          rating,
+          comment,
+          timestamp: Date.now()
+        })
+      }, {merge:true});
+      card.querySelector('textarea').value = '';
+    });
+
+    return card;
+  }
+
+</script>
 </body>
 </html>
